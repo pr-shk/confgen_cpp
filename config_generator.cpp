@@ -2,12 +2,27 @@
 #include <fstream>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 using namespace std;
 
 // Função para verificar se o GDB existe
 bool checkGDBExists() {
     return filesystem::exists("C:\\msys64\\mingw64\\bin\\gdb.exe");
+}
+
+// Função para encontrar arquivos .cpp no diretório
+vector<string> findCppFiles(const string& projectPath, const string& excludeFile = "") {
+    vector<string> cppFiles;
+    for (const auto& entry : filesystem::directory_iterator(projectPath)) {
+        string filename = entry.path().filename().string();
+        if (entry.path().extension() == ".cpp" && 
+            filename != "config_generator.cpp" && 
+            (excludeFile.empty() || filename != excludeFile)) {
+            cppFiles.push_back(filename);
+        }
+    }
+    return cppFiles;
 }
 
 // Função para criar diretório .vscode se não existir
@@ -84,20 +99,40 @@ void createLaunchJson(const string& projectPath, bool hasGDB) {
 }
 
 // Função para criar arquivo tasks.json
-void createTasksJson(const string& projectPath) {
+void createTasksJson(const string& projectPath, const string& excludeFile = "", bool isManualMode = false) {
     ofstream file(filesystem::path(projectPath) / ".vscode" / "tasks.json");
+    
+    // Encontra todos os arquivos .cpp no diretório (apenas se não for modo manual)
+    vector<string> cppFiles;
+    if (!isManualMode) {
+        cppFiles = findCppFiles(projectPath, excludeFile);
+    }
+    
+    // Cria a string de argumentos para compilação
+    string args = R"(
+                "-fdiagnostics-color=always",
+                "-g",
+                "${file}")";
+    
+    // Adiciona os outros arquivos .cpp se existirem e não for modo manual
+    if (!isManualMode && !cppFiles.empty()) {
+        for (const auto& cppFile : cppFiles) {
+            args += ",\n                \"" + cppFile + "\"";
+        }
+    }
+    
+    // Adiciona as opções de saída
+    args += R"(,
+                "-o",
+                "${fileDirname}\\${fileBasenameNoExtension}.exe")";
+    
     file << R"({
     "tasks": [
         {
             "type": "cppbuild",
             "label": "C/C++: g++.exe build active file",
             "command": "C:\\msys64\\mingw64\\bin\\g++.exe",
-            "args": [
-                "-fdiagnostics-color=always",
-                "-g",
-                "${file}",
-                "-o",
-                "${fileDirname}\\${fileBasenameNoExtension}.exe"
+            "args": [)" << args << R"(
             ],
             "options": {
                 "cwd": "${fileDirname}"
@@ -117,12 +152,18 @@ void createTasksJson(const string& projectPath) {
     file.close();
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     string projectPath;
     bool hasGDB = checkGDBExists();
+    bool isManualMode = argc == 1; // Se não tiver argumentos, é modo manual
     
-    cout << "Digite o caminho do projeto (pressione Enter para usar o diretório atual): ";
-    getline(cin, projectPath);
+    if (isManualMode) {
+        cout << "Digite o caminho do projeto (pressione Enter para usar o diretório atual): ";
+        getline(cin, projectPath);
+    } else {
+        // No modo automático, usa o diretório atual
+        projectPath = filesystem::current_path().string();
+    }
     
     if (projectPath.empty()) {
         projectPath = filesystem::current_path().string();
@@ -131,13 +172,20 @@ int main() {
     try {
         createVSCodeDir(projectPath);
         createLaunchJson(projectPath, hasGDB);
-        createTasksJson(projectPath);
         
-        cout << "\nArquivos de configuração criados com sucesso em: " << projectPath << "\\.vscode\\" << endl;
-        cout << "- launch.json" << endl;
-        cout << "- tasks.json" << endl;
+        if (isManualMode) {
+            // Modo manual: cria apenas os arquivos básicos
+            createTasksJson(projectPath, "", true);
+            cout << "\nArquivos de configuração criados com sucesso em: " << projectPath << "\\.vscode\\" << endl;
+            cout << "- launch.json" << endl;
+            cout << "- tasks.json" << endl;
+        } else {
+            // Modo automático: inclui outros arquivos .cpp
+            string currentFile = argv[1]; // Nome do arquivo que está sendo compilado
+            createTasksJson(projectPath, currentFile, false);
+        }
         
-        if (!hasGDB) {
+        if (!hasGDB && isManualMode) {
             cout << "\nAviso: GDB não encontrado. A configuração de debug foi simplificada." << endl;
             cout << "Para ter debug completo, instale o GDB em: C:\\msys64\\mingw64\\bin\\gdb.exe" << endl;
         }
